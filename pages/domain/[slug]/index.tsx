@@ -18,98 +18,126 @@ import AddKeywords from '../../../components/keywords/AddKeywords';
 import Footer from '../../../components/common/Footer';
 
 const SingleDomain: NextPage = () => {
-   const router = useRouter();
-   const [showAddKeywords, setShowAddKeywords] = useState(false);
-   const [showAddDomain, setShowAddDomain] = useState(false);
-   const [showDomainSettings, setShowDomainSettings] = useState(false);
-   const [showSettings, setShowSettings] = useState(false);
-   const [keywordSPollInterval, setKeywordSPollInterval] = useState<undefined|number>(undefined);
-   const { data: appSettingsData, isLoading: isAppSettingsLoading } = useFetchSettings();
-   const { data: domainsData } = useFetchDomains(router);
-   const appSettings: SettingsType = appSettingsData?.settings || {};
-   const { scraper_type = '', available_scapers = [] } = appSettings;
-   const activeScraper = useMemo(() => available_scapers.find((scraper) => scraper.value === scraper_type), [scraper_type, available_scapers]);
+  const router = useRouter();
+  const [showAddKeywords, setShowAddKeywords] = useState(false);
+  const [showAddDomain, setShowAddDomain] = useState(false);
+  const [showDomainSettings, setShowDomainSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [keywordSPollInterval, setKeywordSPollInterval] = useState<undefined | number>(undefined);
 
-   const activDomain: DomainType|null = useMemo(() => {
-      let active:DomainType|null = null;
-      if (domainsData?.domains && router.query?.slug) {
-         active = domainsData.domains.find((x:DomainType) => x.slug === router.query.slug) || null;
-      }
-      return active;
-   }, [router.query.slug, domainsData]);
+  const { data: appSettingsData, isLoading: isAppSettingsLoading } = useFetchSettings();
+  const appSettings: SettingsType = appSettingsData?.settings || {};
+  const { scraper_type = '', available_scapers = [] } = appSettings;
 
-   const domainHasScAPI = useMemo(() => {
-      const doaminSc = activDomain?.search_console ? JSON.parse(activDomain.search_console) : {};
-      return !!(doaminSc?.client_email && doaminSc?.private_key);
-   }, [activDomain]);
+  const { data: domainsData } = useFetchDomains(router);
 
-   const { keywordsData, keywordsLoading } = useFetchKeywords(router, activDomain?.domain || '', setKeywordSPollInterval, keywordSPollInterval);
-   const theDomains: DomainType[] = (domainsData && domainsData.domains) || [];
-   const theKeywords: KeywordType[] = keywordsData && keywordsData.keywords;
+  const activeScraper = useMemo(() => available_scapers.find((scraper) => scraper.value === scraper_type), [scraper_type, available_scapers]);
 
-   return (
-      <div className="Domain ">
-         {((!scraper_type || (scraper_type === 'none')) && !isAppSettingsLoading) && (
-               <div className=' p-3 bg-red-600 text-white text-sm text-center'>
-                  A Scrapper/Proxy has not been set up Yet. Open Settings to set it up and start using the app.
-               </div>
-         )}
-         {activDomain && activDomain.domain
-         && <Head>
-               <title>{`${activDomain.domain} - SerpBear` } </title>
-            </Head>
-         }
-         <TopBar showSettings={() => setShowSettings(true)} showAddModal={() => setShowAddDomain(true)} />
-         <div className="flex w-full max-w-7xl mx-auto">
-            <Sidebar domains={theDomains} showAddModal={() => setShowAddDomain(true)} />
-            <div className="domain_kewywords px-5 pt-10 lg:px-0 lg:pt-8 w-full">
-               {activDomain && activDomain.domain
-               ? <DomainHeader
-                  domain={activDomain}
-                  domains={theDomains}
-                  showAddModal={setShowAddKeywords}
-                  showSettingsModal={setShowDomainSettings}
-                  exportCsv={() => exportCSV(theKeywords, activDomain.domain)}
-                  />
-                  : <div className='w-full lg:h-[100px]'></div>
-               }
-               <KeywordsTable
-               isLoading={keywordsLoading}
-               domain={activDomain}
-               keywords={theKeywords}
-               showAddModal={showAddKeywords}
-               setShowAddModal={setShowAddKeywords}
-               isConsoleIntegrated={!!(appSettings && appSettings.search_console_integrated) || domainHasScAPI }
-               settings={appSettings}
-               />
-            </div>
-         </div>
+  // Renamed from activDomain to activeDomain for clarity
+  const activeDomain: DomainType | null = useMemo(() => {
+    if (domainsData?.domains && router.query?.slug) {
+      return domainsData.domains.find((x: DomainType) => x.slug === router.query.slug) || null;
+    }
+    return null;
+  }, [router.query.slug, domainsData]);
 
-         <CSSTransition in={showAddDomain} timeout={300} classNames="modal_anim" unmountOnExit mountOnEnter>
-            <AddDomain closeModal={() => setShowAddDomain(false)} domains={domainsData?.domains || []} />
-         </CSSTransition>
+  // Use safe JSON parsing with try-catch
+  const domainSc = useMemo(() => {
+    try {
+      return activeDomain?.search_console ? JSON.parse(activeDomain.search_console) : {};
+    } catch (e) {
+      console.error('Invalid search_console JSON:', e);
+      return {};
+    }
+  }, [activeDomain]);
 
-         <CSSTransition in={showDomainSettings} timeout={300} classNames="modal_anim" unmountOnExit mountOnEnter>
-            <DomainSettings
-            domain={showDomainSettings && theDomains && activDomain && activDomain.domain ? activDomain : false}
-            closeModal={setShowDomainSettings}
+  const domainHasScAPI = useMemo(() => {
+    return !!(domainSc?.client_email && domainSc?.private_key);
+  }, [domainSc]);
+
+  const { keywordsData, keywordsLoading } = useFetchKeywords(
+    router,
+    activeDomain?.domain || '',
+    setKeywordSPollInterval,
+    keywordSPollInterval
+  );
+
+  // Memoize keyword and domain arrays
+  const theDomains: DomainType[] = useMemo(() => domainsData?.domains || [], [domainsData]);
+  const theKeywords: KeywordType[] = useMemo(() => keywordsData?.keywords || [], [keywordsData]);
+
+  // Extracted conditional for readability
+  const showNoScraperWarning = !isAppSettingsLoading && (!scraper_type || scraper_type === 'none');
+
+  return (
+    <div className="Domain">
+      {showNoScraperWarning && (
+        <div className="p-3 bg-red-600 text-white text-sm text-center">
+          A scraper or proxy has not been set up. Open Settings to configure and start using the app.
+        </div>
+      )}
+
+      {activeDomain?.domain && (
+        <Head>
+          <title>{`${activeDomain.domain} - SerpBear`}</title>
+        </Head>
+      )}
+
+      <TopBar showSettings={() => setShowSettings(true)} showAddModal={() => setShowAddDomain(true)} />
+
+      <div className="flex w-full max-w-7xl mx-auto">
+        <Sidebar domains={theDomains} showAddModal={() => setShowAddDomain(true)} />
+
+        <div className="domain_kewywords px-5 pt-10 lg:px-0 lg:pt-8 w-full">
+          {activeDomain?.domain ? (
+            <DomainHeader
+              domain={activeDomain}
+              domains={theDomains}
+              showAddModal={setShowAddKeywords}
+              showSettingsModal={setShowDomainSettings}
+              exportCsv={() => exportCSV(theKeywords, activeDomain.domain)}
             />
-         </CSSTransition>
-         <CSSTransition in={showSettings} timeout={300} classNames="settings_anim" unmountOnExit mountOnEnter>
-             <Settings closeSettings={() => setShowSettings(false)} />
-         </CSSTransition>
-         <CSSTransition in={showAddKeywords} timeout={300} classNames="modal_anim" unmountOnExit mountOnEnter>
-            <AddKeywords
-               domain={activDomain?.domain || ''}
-               scraperName={activeScraper?.label || ''}
-               keywords={theKeywords}
-               allowsCity={!!activeScraper?.allowsCity}
-               closeModal={() => setShowAddKeywords(false)}
-               />
-         </CSSTransition>
-         <Footer currentVersion={appSettings?.version ? appSettings.version : ''} />
+          ) : (
+            <div className="w-full lg:h-[100px]"></div>
+          )}
+
+          <KeywordsTable
+            isLoading={keywordsLoading}
+            domain={activeDomain}
+            keywords={theKeywords}
+            showAddModal={showAddKeywords}
+            setShowAddModal={setShowAddKeywords}
+            isConsoleIntegrated={!!(appSettings?.search_console_integrated || domainHasScAPI)}
+            settings={appSettings}
+          />
+        </div>
       </div>
-   );
+
+      <CSSTransition in={showAddDomain} timeout={300} classNames="modal_anim" unmountOnExit mountOnEnter>
+        <AddDomain closeModal={() => setShowAddDomain(false)} domains={theDomains} />
+      </CSSTransition>
+
+      <CSSTransition in={showDomainSettings} timeout={300} classNames="modal_anim" unmountOnExit mountOnEnter>
+        <DomainSettings domain={showDomainSettings && activeDomain?.domain ? activeDomain : null} closeModal={setShowDomainSettings} />
+      </CSSTransition>
+
+      <CSSTransition in={showSettings} timeout={300} classNames="settings_anim" unmountOnExit mountOnEnter>
+        <Settings closeSettings={() => setShowSettings(false)} />
+      </CSSTransition>
+
+      <CSSTransition in={showAddKeywords} timeout={300} classNames="modal_anim" unmountOnExit mountOnEnter>
+        <AddKeywords
+          domain={activeDomain?.domain || ''}
+          scraperName={activeScraper?.label || ''}
+          keywords={theKeywords}
+          allowsCity={!!activeScraper?.allowsCity}
+          closeModal={() => setShowAddKeywords(false)}
+        />
+      </CSSTransition>
+
+      <Footer currentVersion={appSettings?.version || ''} />
+    </div>
+  );
 };
 
 export default SingleDomain;
