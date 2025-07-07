@@ -1,96 +1,115 @@
 import toast from 'react-hot-toast';
 import { useMutation, useQuery, useQueryClient } from 'react-query';
 
+// ✅ Centralized fetch error handling
+async function fetchWithHandling(
+  input: RequestInfo,
+  init?: RequestInit
+): Promise<any> {
+  const res = await fetch(input, init);
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData?.error || res.statusText || 'Request failed');
+  }
+  return res.json();
+}
+
+// ✅ Fetch settings
 export async function fetchSettings() {
-   const res = await fetch(`${window.location.origin}/api/settings`, { method: 'GET' });
-   return res.json();
+  return fetchWithHandling('/api/settings');
 }
 
 export function useFetchSettings() {
-   return useQuery('settings', () => fetchSettings());
+  return useQuery(['settings'], fetchSettings, {
+    staleTime: 60 * 1000,
+    retry: 1,
+  });
 }
 
-export const useUpdateSettings = (onSuccess:Function|undefined) => {
-   const queryClient = useQueryClient();
+// ✅ Update settings
+export const useUpdateSettings = (onSuccess?: () => void) => {
+  const queryClient = useQueryClient();
 
-   return useMutation(async (settings: SettingsType) => {
-      // console.log('settings: ', JSON.stringify(settings));
-
-      const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-      const fetchOpts = { method: 'PUT', headers, body: JSON.stringify({ settings }) };
-      const res = await fetch(`${window.location.origin}/api/settings`, fetchOpts);
-      if (res.status >= 400 && res.status < 600) {
-         throw new Error('Bad response from server');
-      }
-      return res.json();
-   }, {
-      onSuccess: async () => {
-         if (onSuccess) {
-            onSuccess();
-         }
-         toast('Settings Updated!', { icon: '✔️' });
-         queryClient.invalidateQueries(['settings']);
+  return useMutation(
+    async (settings: SettingsType) => {
+      return fetchWithHandling('/api/settings', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ settings }),
+      });
+    },
+    {
+      onSuccess: () => {
+        toast.success('Settings Updated!', { icon: '✔️', id: 'settings-update-success' });
+        onSuccess?.();
+        queryClient.invalidateQueries(['settings']);
       },
       onError: () => {
-         console.log('Error Updating App Settings!!!');
-         toast('Error Updating App Settings.', { icon: '⚠️' });
+        console.error('Error Updating App Settings');
+        toast.error('Error Updating App Settings.', { icon: '⚠️', id: 'settings-update-error' });
       },
-   });
+    }
+  );
 };
 
-export function useClearFailedQueue(onSuccess:Function) {
-   const queryClient = useQueryClient();
-   return useMutation(async () => {
-      const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-      const fetchOpts = { method: 'PUT', headers };
-      const res = await fetch(`${window.location.origin}/api/clearfailed`, fetchOpts);
-      if (res.status >= 400 && res.status < 600) {
-         throw new Error('Bad response from server');
-      }
-      return res.json();
-   }, {
-      onSuccess: async () => {
-         onSuccess();
-         toast('Failed Queue Cleared', { icon: '✔️' });
-         queryClient.invalidateQueries(['settings']);
+// ✅ Clear failed queue
+export function useClearFailedQueue(onSuccess: () => void) {
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async () =>
+      fetchWithHandling('/api/clearfailed', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+      }),
+    {
+      onSuccess: () => {
+        toast.success('Failed Queue Cleared', { icon: '✔️', id: 'queue-clear' });
+        onSuccess();
+        queryClient.invalidateQueries(['settings']);
       },
       onError: () => {
-         console.log('Error Clearing Failed Queue!!!');
-         toast('Error Clearing Failed Queue.', { icon: '⚠️' });
+        console.error('Error Clearing Failed Queue');
+        toast.error('Error Clearing Failed Queue.', { icon: '⚠️', id: 'queue-clear-error' });
       },
-   });
+    }
+  );
 }
 
+// ✅ Fetch DB migration status
 export async function fetchMigrationStatus() {
-   const res = await fetch(`${window.location.origin}/api/dbmigrate`, { method: 'GET' });
-   return res.json();
+  return fetchWithHandling('/api/dbmigrate');
 }
 
 export function useCheckMigrationStatus() {
-   return useQuery('dbmigrate', () => fetchMigrationStatus());
+  return useQuery(['dbmigrate'], fetchMigrationStatus, {
+    staleTime: 60 * 1000,
+    retry: 1,
+  });
 }
 
-export const useMigrateDatabase = (onSuccess:Function|undefined) => {
-   const queryClient = useQueryClient();
+// ✅ Run DB migration
+export const useMigrateDatabase = (onSuccess?: (res?: any) => void) => {
+  const queryClient = useQueryClient();
 
-   return useMutation(async () => {
-      // console.log('settings: ', JSON.stringify(settings));
-      const res = await fetch(`${window.location.origin}/api/dbmigrate`, { method: 'POST' });
-      if (res.status >= 400 && res.status < 600) {
-         throw new Error('Bad response from server');
-      }
-      return res.json();
-   }, {
-      onSuccess: async (res) => {
-         if (onSuccess) {
-            onSuccess(res);
-         }
-         toast('Database Updated!', { icon: '✔️' });
-         queryClient.invalidateQueries(['settings']);
+  return useMutation(
+    async () => fetchWithHandling('/api/dbmigrate', { method: 'POST' }),
+    {
+      onSuccess: (res) => {
+        toast.success('Database Updated!', { icon: '✔️', id: 'db-update' });
+        onSuccess?.(res);
+        queryClient.invalidateQueries(['settings']);
       },
       onError: () => {
-         console.log('Error Updating Database!!!');
-         toast('Error Updating Database.', { icon: '⚠️' });
+        console.error('Error Updating Database');
+        toast.error('Error Updating Database.', { icon: '⚠️', id: 'db-update-error' });
       },
-   });
+    }
+  );
 };
