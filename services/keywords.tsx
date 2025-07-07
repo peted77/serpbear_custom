@@ -1,193 +1,187 @@
+import { useRouter, NextRouter } from 'next/router';
 import toast from 'react-hot-toast';
-import { NextRouter } from 'next/router';
 import { useMutation, useQuery, useQueryClient } from 'react-query';
 
-export const fetchKeywords = async (router: NextRouter, domain: string) => {
-   if (!domain) { return []; }
-   const res = await fetch(`${window.location.origin}/api/keywords?domain=${domain}`, { method: 'GET' });
-   return res.json();
+// Types
+type UpdatePayload = {
+  domainSettings: DomainSettings;
+  domain: DomainType;
 };
 
-export function useFetchKeywords(
-   router: NextRouter,
-   domain: string,
-   setKeywordSPollInterval?:Function,
-   keywordSPollInterval:undefined|number = undefined,
+// Shared utilities
+const createHeaders = () => ({
+  'Content-Type': 'application/json',
+  Accept: 'application/json',
+});
+
+function createFetchOptions(
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  data?: Record<string, any>
+): RequestInit {
+  return {
+    method,
+    headers: createHeaders(),
+    ...(data && { body: JSON.stringify(data) }),
+  };
+}
+
+async function fetchWithHandling(
+  url: string,
+  options: RequestInit,
+  router?: NextRouter
 ) {
-   const { data: keywordsData, isLoading: keywordsLoading, isError } = useQuery(
-      ['keywords', domain],
-      () => fetchKeywords(router, domain),
-      {
-         refetchInterval: keywordSPollInterval,
-         onSuccess: (data) => {
-            // If Keywords are Manually Refreshed check if the any of the keywords position are still being fetched
-            // If yes, then refecth the keywords every 5 seconds until all the keywords position is updated by the server
-            if (data.keywords && data.keywords.length > 0 && setKeywordSPollInterval) {
-               const hasRefreshingKeyword = data.keywords.some((x:KeywordType) => x.updating);
-               if (hasRefreshingKeyword) {
-                  setKeywordSPollInterval(5000);
-               } else {
-                  if (keywordSPollInterval) {
-                     toast('Keywords Refreshed!', { icon: '✔️' });
-                  }
-                  setKeywordSPollInterval(undefined);
-               }
-            }
-         },
-      },
-   );
-   return { keywordsData, keywordsLoading, isError };
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    if (res.status === 401 && router) router.push('/login');
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData?.error || res.statusText || 'Request failed');
+  }
+  return res.json();
 }
 
-export function useAddKeywords(onSuccess:Function) {
-   const queryClient = useQueryClient();
-   return useMutation(async (keywords:KeywordAddPayload[]) => {
-      const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-      const fetchOpts = { method: 'POST', headers, body: JSON.stringify({ keywords }) };
-      const res = await fetch(`${window.location.origin}/api/keywords`, fetchOpts);
-      if (res.status >= 400 && res.status < 600) {
-         throw new Error('Bad response from server');
-      }
-      return res.json();
-   }, {
-      onSuccess: async () => {
-         console.log('Keywords Added!!!');
-         toast('Keywords Added Successfully!', { icon: '✔️' });
-         onSuccess();
-         queryClient.invalidateQueries(['keywords']);
+// Fetch all domains
+export async function fetchDomains(router: NextRouter, withStats: boolean): Promise<{ domains: DomainType[] }> {
+  const url = `/api/domains${withStats ? '?withstats=true' : ''}`;
+  return await fetchWithHandling(url, createFetchOptions('GET'), router);
+}
+
+// Fetch a single domain
+export async function fetchDomain(router: NextRouter, domainName: string): Promise<{ domain: DomainType }> {
+  if (!domainName) throw new Error('No Domain Name Provided!');
+  const url = `/api/domain?domain=${encodeURIComponent(domainName)}`;
+  return await fetchWithHandling(url, createFetchOptions('GET'), router);
+}
+
+// Fetch domain screenshot and cache to localStorage
+export async function fetchDomainScreenshot(domain: string, screenshotKey: string, forceFetch = false): Promise<string | false> {
+  if (typeof window === 'undefined') return false;
+
+  const cached = localStorage.getItem('domainThumbs');
+  const domainThumbs = cached ? JSON.parse(cached) : {};
+
+  if (!domainThumbs[domain] || forceFetch) {
+    try {
+      const screenshotURL = `https://image.thum.io/get/auth/${screenshotKey}/maxAge/96/width/200/https://${domain}`;
+      const res = await fetch(screenshotURL);
+      if (!res.ok) return false;
+      const blob = await res.blob();
+
+      const reader = new FileReader();
+      const result = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+
+      domainThumbs[domain] = result;
+      localStorage.setItem('domainThumbs', JSON.stringify(domainThumbs));
+      return result;
+    } catch {
+      return false;
+    }
+  }
+
+  return domainThumbs[domain];
+}
+
+// React Query Hooks
+
+export function useFetchDomains(router: NextRouter, withStats = false) {
+  return useQuery(['domains', withStats], () => fetchDomains(router, withStats), {
+    retry: false,
+  });
+}
+
+export function useFetchDomain(router: NextRouter, domainName: string, onSuccess?: (domain: DomainType) => void) {
+  return useQuery(['domain', domainName], () => fetchDomain(router, domainName), {
+    enabled: !!domainName,
+    retry: false,
+    onSuccess: (data) => {
+      console.log('Domain Loaded:', data.domain);
+      onSuccess?.(data.domain);
+    },
+  });
+}
+
+export function useAddDomain(onSuccess?: () => void) {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async (domains: string[]) => {
+      const url = '/api/domains';
+      const options = createFetchOptions('POST', { domains });
+      return await fetchWithHandling(url, options);
+    },
+    {
+      onSuccess: (data) => {
+        const newDomains: DomainType[] = data.domains;
+        const singleDomain = newDomains.length === 1;
+
+        toast.success(
+          singleDomain
+            ? `Domain "${newDomains[0].domain}" added successfully!`
+            : `${newDomains.length} domains added successfully!`,
+          { id: 'domain-add-success' }
+        );
+
+        onSuccess?.();
+
+        if (singleDomain) {
+          router.push(`/domain/${newDomains[0].slug}`);
+        }
+
+        queryClient.invalidateQueries(['domains']);
       },
       onError: () => {
-         console.log('Error Adding New Keywords!!!');
-         toast('Error Adding New Keywords', { icon: '⚠️' });
+        console.error('Error Adding New Domain');
+        toast.error('Error Adding New Domain', { id: 'domain-add-error' });
       },
-   });
+    }
+  );
 }
 
-export function useDeleteKeywords(onSuccess:Function) {
-   const queryClient = useQueryClient();
-   return useMutation(async (keywordIDs:number[]) => {
-      const keywordIds = keywordIDs.join(',');
-      const res = await fetch(`${window.location.origin}/api/keywords?id=${keywordIds}`, { method: 'DELETE' });
-      if (res.status >= 400 && res.status < 600) {
-         throw new Error('Bad response from server');
-      }
-      return res.json();
-   }, {
-      onSuccess: async () => {
-         console.log('Removed Keyword!!!');
-         onSuccess();
-         toast('Keywords Removed Successfully!', { icon: '✔️' });
-         queryClient.invalidateQueries(['keywords']);
+export function useUpdateDomain(onSuccess?: () => void) {
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async ({ domainSettings, domain }: UpdatePayload) => {
+      const url = `/api/domains?domain=${encodeURIComponent(domain.domain)}`;
+      const options = createFetchOptions('PUT', domainSettings);
+      return await fetchWithHandling(url, options);
+    },
+    {
+      onSuccess: () => {
+        toast.success('Settings Updated!', { id: 'domain-update-success' });
+        onSuccess?.();
+        queryClient.invalidateQueries(['domains']);
+      },
+      onError: (error) => {
+        console.error('Error Updating Domain Settings:', error);
+        toast.error('Error Updating Domain Settings', { id: 'domain-update-error' });
+      },
+    }
+  );
+}
+
+export function useDeleteDomain(onSuccess?: () => void) {
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async (domain: DomainType) => {
+      const url = `/api/domains?domain=${encodeURIComponent(domain.domain)}`;
+      return await fetchWithHandling(url, createFetchOptions('DELETE'));
+    },
+    {
+      onSuccess: () => {
+        toast.success('Domain Removed Successfully!', { id: 'domain-delete-success' });
+        onSuccess?.();
+        queryClient.invalidateQueries(['domains']);
       },
       onError: () => {
-         console.log('Error Removing Keyword!!!');
-         toast('Error Removing the Keywords', { icon: '⚠️' });
+        console.error('Error Removing Domain');
+        toast.error('Error Removing Domain', { id: 'domain-delete-error' });
       },
-   });
-}
-
-export function useFavKeywords(onSuccess:Function) {
-   const queryClient = useQueryClient();
-   return useMutation(async ({ keywordID, sticky }:{keywordID:number, sticky:boolean}) => {
-      const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-      const fetchOpts = { method: 'PUT', headers, body: JSON.stringify({ sticky }) };
-      const res = await fetch(`${window.location.origin}/api/keywords?id=${keywordID}`, fetchOpts);
-      if (res.status >= 400 && res.status < 600) {
-         throw new Error('Bad response from server');
-      }
-      return res.json();
-   }, {
-      onSuccess: async (data) => {
-         onSuccess();
-         const isSticky = data.keywords[0] && data.keywords[0].sticky;
-         toast(isSticky ? 'Keywords Made Favorite!' : 'Keywords Unfavorited!', { icon: '✔️' });
-         queryClient.invalidateQueries(['keywords']);
-      },
-      onError: () => {
-         console.log('Error Changing Favorite Status!!!');
-         toast('Error Changing Favorite Status.', { icon: '⚠️' });
-      },
-   });
-}
-
-export function useUpdateKeywordTags(onSuccess:Function) {
-   const queryClient = useQueryClient();
-   return useMutation(async ({ tags }:{tags:{ [ID:number]: string[] }}) => {
-      const keywordIds = Object.keys(tags).join(',');
-      const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'application/json' });
-      const fetchOpts = { method: 'PUT', headers, body: JSON.stringify({ tags }) };
-      const res = await fetch(`${window.location.origin}/api/keywords?id=${keywordIds}`, fetchOpts);
-      if (res.status >= 400 && res.status < 600) {
-         throw new Error('Bad response from server');
-      }
-      return res.json();
-   }, {
-      onSuccess: async () => {
-         onSuccess();
-         toast('Keyword Tags Updated!', { icon: '✔️' });
-         queryClient.invalidateQueries(['keywords']);
-      },
-      onError: () => {
-         console.log('Error Updating Keyword Tags!!!');
-         toast('Error Updating Keyword Tags.', { icon: '⚠️' });
-      },
-   });
-}
-
-export function useRefreshKeywords(onSuccess:Function) {
-   const queryClient = useQueryClient();
-   return useMutation(async ({ ids = [], domain = '' } : {ids?: number[], domain?: string}) => {
-      const keywordIds = ids.join(',');
-      console.log(keywordIds);
-      const query = ids.length === 0 && domain ? `?id=all&domain=${domain}` : `?id=${keywordIds}`;
-      const res = await fetch(`${window.location.origin}/api/refresh${query}`, { method: 'POST' });
-      if (res.status >= 400 && res.status < 600) {
-         throw new Error('Bad response from server');
-      }
-      return res.json();
-   }, {
-      onSuccess: async () => {
-         console.log('Keywords Added to Refresh Queue!!!');
-         onSuccess();
-         toast('Keywords Added to Refresh Queue', { icon: '🔄' });
-         queryClient.invalidateQueries(['keywords']);
-      },
-      onError: () => {
-         console.log('Error Refreshing Keywords!!!');
-         toast('Error Refreshing Keywords.', { icon: '⚠️' });
-      },
-   });
-}
-
-export function useFetchSingleKeyword(keywordID:number) {
-   return useQuery(['keyword', keywordID], async () => {
-      try {
-         const fetchURL = `${window.location.origin}/api/keyword?id=${keywordID}`;
-         const res = await fetch(fetchURL, { method: 'GET' }).then((result) => result.json());
-         if (res.status >= 400 && res.status < 600) {
-            throw new Error('Bad response from server');
-         }
-         return { history: res.keyword.history || [], searchResult: res.keyword.lastResult || [] };
-      } catch (error) {
-         throw new Error('Error Loading Keyword Details');
-      }
-   }, {
-      onError: () => {
-         console.log('Error Loading Keyword Data!!!');
-         toast('Error Loading Keyword Details.', { icon: '⚠️' });
-      },
-   });
-}
-
-export async function fetchSearchResults(router:NextRouter, keywordData: Record<string, string>) {
-   const { keyword, country, device } = keywordData;
-   const res = await fetch(`${window.location.origin}/api/refresh?keyword=${keyword}&country=${country}&device=${device}`, { method: 'GET' });
-   if (res.status >= 400 && res.status < 600) {
-      if (res.status === 401) {
-         console.log('Unauthorized!!');
-         router.push('/login');
-      }
-      throw new Error('Bad response from server');
-   }
-   return res.json();
+    }
+  );
 }
